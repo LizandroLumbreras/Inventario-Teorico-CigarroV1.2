@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Existencia – Almacén Cigarro (COSTEADO)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+ body{
+   font-family: Arial, sans-serif;
+   background:#f4f4f4;
+   padding:20px;
+ }
+ h2{
+   color:#00416A;
+   font-size:26px;
+   margin-bottom:5px;
+ }
+
+ #totalesBox{
+   text-align:right;
+   font-size:18px;
+   font-weight:bold;
+   color:#00416A;
+   margin-bottom:20px;
+ }
+
+ table{
+   width:100%;
+   border-collapse:collapse;
+   background:white;
+   margin-top:15px;
+ }
+ th,td{
+   border:1px solid #ccc;
+   padding:10px;
+   text-align:center;
+   font-size:15px;
+ }
+ th{
+   background:#00416A;
+   color:white;
+ }
+ .positivo{ color:green; font-weight:bold; }
+ .negativo{ color:red; font-weight:bold; }
+</style>
+</head>
+
+<body>
+
+<h2>Existencia Total – Almacén Cigarro (COSTEADO SIN IVA)</h2>
+
+<div id="totalesBox">Calculando…</div>
+
+<table>
+<thead>
+   <tr>
+     <th>Código</th>
+     <th>Descripción</th>
+     <th>Existencia</th>
+     <th>Costo s/IVA</th>
+     <th>Total</th>
+   </tr>
+</thead>
+
+<tbody id="tablaExistencia"></tbody>
+</table>
+
+<script type="module">
+
+// =================================================================
+// FIREBASE
+// =================================================================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { 
+  getFirestore, collection, query, where,
+  getDocs, onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCK5nb6u2CGRJ8AB1aPlRn54b97bdeAFeM",
+  authDomain: "inventariopv-643f1.firebaseapp.com",
+  projectId: "inventariopv-643f1",
+  storageBucket: "inventariopv-643f1.appspot.com",
+  messagingSenderId: "96242533231",
+  appId: "1:96242533231:web:aae75a18fbaf9840529e9a"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// =================================================================
+// VARIABLES
+// =================================================================
+let productos = {};
+let inventarioBase = {};
+let entradasNuevas = {};
+let salidasNuevas = {};
+
+let productosListos = false;
+let baseLista = false;
+let entradasListas = false;
+let salidasListas = false;
+
+// FECHA CORTE IGUAL QUE ZAPATA
+const fechaCorte = new Date("2025-11-24T00:00:00");
+
+// =================================================================
+// NORMALIZAR CÓDIGO
+// =================================================================
+function normCodigo(cod){
+  if(!cod) return "";
+  return cod.toString().trim().padStart(12, "0");
+}
+
+// =================================================================
+// 1) CARGAR PRODUCTOS ACTIVOS DEL DEPARTAMENTO CIGARROS
+// =================================================================
+async function cargarProductos(){
+
+  const q = query(
+    collection(db, "productos"), 
+    where("activo", "==", true),
+    where("departamento", "==", "CIGARROS")
+  );
+
+  const snap = await getDocs(q);
+
+  snap.forEach(docu => {
+    const d = docu.data();
+
+    const codigo = normCodigo(d.codigoBarra || d.productoId || "");
+
+    productos[codigo] = {
+      marca: d.marca || "SIN MARCA",
+      descripcion: d.concepto || d.descripcion || "-",
+      costo: Number(d.costoSinImpuesto || 0)
+    };
+  });
+
+  productosListos = true;
+  intentarDibujar();
+}
+
+// =================================================================
+// 2) CARGAR INVENTARIO BASE
+// =================================================================
+async function cargarInventarioBase(){
+
+  const ref = collection(db, "almacenes/almacen_cigarro/inventario_base");
+  const snap = await getDocs(ref);
+
+  snap.forEach(docu => {
+    const codigo = normCodigo(docu.id);
+    inventarioBase[codigo] = docu.data().existencia || 0;
+  });
+
+  baseLista = true;
+  intentarDibujar();
+}
+
+// =================================================================
+// 3) CARGAR ENTRADAS NUEVAS (cantidadTotal)
+// =================================================================
+function cargarEntradas(){
+
+  const ref = collection(db, "almacenes/almacen_cigarrro/entradas");
+
+  onSnapshot(ref, snap => {
+
+    entradasNuevas = {};
+
+    snap.forEach(docu => {
+
+      const data = docu.data();
+      const fecha = new Date(data.fecha || data.timestamp);
+
+      if(fecha <= fechaCorte) return;
+
+      if(Array.isArray(data.items)){
+        data.items.forEach(item => {
+
+          const codigo = normCodigo(item.productoId || item.codigo || "");
+          const piezas = Number(item.cantidadTotal || 0);
+
+          entradasNuevas[codigo] = (entradasNuevas[codigo] || 0) + piezas;
+
+        });
+      }
+
+    });
+
+    entradasListas = true;
+    intentarDibujar();
+  });
+}
+
+// =================================================================
+// 4) CARGAR SALIDAS NUEVAS
+// =================================================================
+function cargarSalidas(){
+
+  const ref = collection(db, "almacenes/almacen_cigarro/salidas1.0");
+
+  onSnapshot(ref, snap => {
+
+    salidasNuevas = {};
+
+    snap.forEach(docu => {
+
+      const data = docu.data();
+      const fecha = data.timestamp?.toDate?.() || new Date(data.timestamp);
+
+      if(fecha <= fechaCorte) return;
+
+      if(Array.isArray(data.productos)){
+        data.productos.forEach(item => {
+
+          const codigo = normCodigo(item.codigo || item.codigoBarra || "");
+          const cant = Number(item.cantidad || 0);
+
+          salidasNuevas[codigo] = (salidasNuevas[codigo] || 0) + cant;
+
+        });
+      }
+
+    });
+
+    salidasListas = true;
+    intentarDibujar();
+  });
+}
+
+// =================================================================
+// 5) DIBUJAR TABLA
+// =================================================================
+function intentarDibujar(){
+  if(productosListos && baseLista && entradasListas && salidasListas){
+    dibujar();
+  }
+}
+
+function dibujar(){
+
+  const tabla = document.getElementById("tablaExistencia");
+  tabla.innerHTML = "";
+
+  let porMarca = {};
+  let totalPiezas = 0;
+  let totalDinero = 0;
+
+  Object.keys(productos).forEach(codigo => {
+
+    const p = productos[codigo];
+
+    const base = inventarioBase[codigo] || 0;
+    const ent = entradasNuevas[codigo] || 0;
+    const sal = salidasNuevas[codigo] || 0;
+
+    const existencia = base + ent - sal;
+
+    if(existencia === 0) return;
+
+    const total = existencia * p.costo;
+
+    totalPiezas += existencia;
+    totalDinero += total;
+
+    if(!porMarca[p.marca]) porMarca[p.marca] = [];
+
+    porMarca[p.marca].push({
+      codigo,
+      descripcion: p.descripcion,
+      existencia,
+      costo: p.costo,
+      total
+    });
+
+  });
+
+  // MOSTRAR TOTALES ARRIBA
+  document.getElementById("totalesBox").innerHTML = `
+    Total piezas: <b>${totalPiezas.toLocaleString("es-MX")}</b> —
+    Total dinero: <b>$${totalDinero.toLocaleString("es-MX",{minimumFractionDigits:2})}</b>
+  `;
+
+  // TABLA AGRUPADA POR MARCA
+  Object.keys(porMarca).sort().forEach(marca => {
+
+    tabla.innerHTML += `
+      <tr>
+        <td colspan="5"
+            style="background:linear-gradient(to right,#00416A,#0c6cbd);
+                   color:white;font-size:20px;font-weight:bold;">
+            ${marca}
+        </td>
+      </tr>
+    `;
+
+    porMarca[marca].sort((a,b)=> a.codigo.localeCompare(b.codigo));
+
+    porMarca[marca].forEach(p => {
+
+      tabla.innerHTML += `
+        <tr>
+          <td>${p.codigo}</td>
+          <td>${p.descripcion}</td>
+          <td class="${p.existencia < 0 ? "negativo" : "positivo"}">${p.existencia}</td>
+          <td>$${p.costo.toFixed(2)}</td>
+          <td>$${p.total.toFixed(2)}</td>
+        </tr>
+      `;
+    });
+
+    tabla.innerHTML += `
+      <tr><td colspan="5" style="height:8px;background:#eaeaea;"></td></tr>
+    `;
+
+  });
+
+}
+
+// =================================================================
+// EJECUTAR
+// =================================================================
+await cargarProductos();
+await cargarInventarioBase();
+cargarEntradas();
+cargarSalidas();
+
+</script>
+
+</body>
+</html>
